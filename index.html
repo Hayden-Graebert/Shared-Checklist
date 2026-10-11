@@ -1,0 +1,164 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="description" content="A shared checklist for things two friends want to do together." />
+  <title>Together — Shared Checklist</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css?v=2" />
+</head>
+<body>
+  <div id="fireworks" class="fireworks" aria-hidden="true">
+    <canvas id="fireworksCanvas"></canvas>
+  </div>
+
+  <div class="moon-corner" tabindex="0" aria-label="Be nice!" title="Be nice!">
+    <img src="blue-moon.png" alt="Blue moon" width="62" height="62" />
+    <span class="moon-tooltip" role="tooltip">Be nice!</span>
+  </div>
+
+  <main class="page-shell">
+    <section id="welcomeView" class="welcome-card">
+      <div class="brand-mark">✦</div>
+      <p class="eyebrow">A little list for two</p>
+      <h1>Things we’re going to do together.</h1>
+      <p class="lede">
+        Make a shared checklist, send the link to your friend, and tick things off as you make the memories.
+      </p>
+
+      <div class="account-card">
+        <div class="account-heading">
+          <div>
+            <h2>Keep your checklists with an account</h2>
+            <p id="accountHint">Create an account to recover your checklists on another device. If you already made a guest checklist, creating an account here keeps it.</p>
+          </div>
+          <span id="accountStatus" class="account-status">Guest</span>
+        </div>
+
+        <form id="authForm" class="auth-form">
+          <label>
+            Email
+            <input id="authEmail" type="email" autocomplete="email" placeholder="you@example.com" required />
+          </label>
+          <label>
+            Password
+            <input id="authPassword" type="password" autocomplete="current-password" minlength="6" placeholder="At least 6 characters" required />
+          </label>
+          <div class="auth-actions">
+            <button id="signUpButton" class="button button-primary" type="button">Create account</button>
+            <button id="signInButton" class="button button-secondary" type="submit">Log in</button>
+            <button id="signOutButton" class="text-button hidden" type="button">Log out</button>
+          </div>
+        </form>
+        <p id="authError" class="error-text" role="alert"></p>
+      </div>
+
+      <div id="myChecklists" class="my-checklists hidden">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">Your account</p>
+            <h2>My checklists</h2>
+          </div>
+          <button id="refreshListsButton" class="text-button" type="button">Refresh</button>
+        </div>
+        <div id="myChecklistList" class="my-checklist-list"></div>
+      </div>
+
+      <div class="welcome-actions">
+        <button id="newListButton" class="button button-primary">Create a new checklist</button>
+      </div>
+
+      <div class="join-divider"><span>or open a shared checklist</span></div>
+
+      <form id="joinForm" class="join-form">
+        <label>
+          Shared link
+          <input
+            id="sharedLinkInput"
+            type="url"
+            inputmode="url"
+            autocomplete="url"
+            placeholder="Paste the shared checklist link"
+          />
+        </label>
+        <button class="button button-secondary" type="submit">Open checklist</button>
+      </form>
+
+      <p id="welcomeError" class="error-text" role="alert"></p>
+    </section>
+
+    <section id="appView" class="app-card hidden">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">Our checklist</p>
+          <div class="title-row">
+            <input id="listTitle" class="list-title" maxlength="80" aria-label="Checklist name" />
+            <span id="saveState" class="save-state">Saved</span>
+          </div>
+        </div>
+
+        <div class="topbar-actions">
+          <button id="accountButton" class="icon-button" type="button" title="Account" aria-label="Account">◎</button>
+          <button id="shareButton" class="icon-button" type="button" title="Copy share link" aria-label="Copy share link">↗</button>
+          <button id="themeButton" class="icon-button" type="button" title="Toggle light/dark theme" aria-label="Toggle light/dark theme">☾</button>
+        </div>
+      </header>
+
+      <div class="progress-card">
+        <div class="progress-copy">
+          <strong id="progressText">0 / 0 complete</strong>
+          <span>Every tick is a tiny victory.</span>
+        </div>
+        <div class="progress-track" aria-hidden="true">
+          <div id="progressBar" class="progress-bar"></div>
+        </div>
+      </div>
+
+      <div class="activity-filters" role="group" aria-label="Filter activities">
+        <button type="button" class="filter-button active" data-filter="all" aria-pressed="true">All</button>
+        <button type="button" class="filter-button" data-filter="completed" aria-pressed="false">Completed</button>
+        <button type="button" class="filter-button" data-filter="incomplete" aria-pressed="false">Incomplete</button>
+      </div>
+
+      <form id="activityForm" class="activity-form">
+        <input
+          id="activityInput"
+          maxlength="160"
+          autocomplete="off"
+          placeholder="Add something you want to do together…"
+          aria-label="New activity"
+        />
+        <button class="button button-primary" type="submit">Add</button>
+      </form>
+
+      <div id="activityList" class="activity-list" aria-live="polite"></div>
+
+      <div id="emptyState" class="empty-state hidden">
+        <div class="empty-icon">☼</div>
+        <h2>Your list is ready.</h2>
+        <p>Add your first shared adventure above.</p>
+      </div>
+
+      <footer class="footer">
+        <span>Share this link with your friend so you both see the same list.</span>
+        <button id="closeChecklistButton" class="text-button" type="button">Back</button>
+      </footer>
+
+      <p id="appError" class="error-text" role="alert"></p>
+
+      <div class="app-account-row">
+        <span id="appAccountLabel">Guest mode</span>
+        <button id="appAccountButton" class="text-button" type="button">Account</button>
+      </div>
+    </section>
+  </main>
+
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="app.js?v=2"></script>
+</body>
+</html>
