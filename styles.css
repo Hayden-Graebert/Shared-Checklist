@@ -356,7 +356,7 @@ h1 {
 
 .activity-item {
   display: grid;
-  grid-template-columns: auto 1fr auto;
+  grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
   gap: 14px;
   padding: 14px 14px 14px 16px;
@@ -780,3 +780,32 @@ h1 {
 .filter-button:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; }
 .filter-empty-message { text-align: center; color: var(--muted); padding: 18px 12px; }
 @media (max-width: 600px) { .moon-corner { width: 42px; height: 42px; top: 8px; left: 8px; } .moon-tooltip { font-size: 12px; } }
+
+/* Completion date sits to the right of the activity name, before Delete. */
+.activity-details {
+  display: flex;
+  align-items: center;
+  gap: 8px 16px;
+  min-width: 0;
+}
+.activity-details .activity-text { flex: 1 1 auto; }
+.activity-completed-date {
+  flex: 0 0 auto;
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
+  white-space: nowrap;
+  text-decoration: none;
+  font-variant-numeric: tabular-nums;
+}
+.activity-check input:focus-visible + .checkmark {
+  outline: 2px solid var(--text);
+  outline-offset: 3px;
+}
+.activity-check input:disabled + .checkmark,
+.delete-button:disabled { opacity: 0.55; cursor: wait; }
+@media (max-width: 480px) {
+  .activity-details { flex-wrap: wrap; gap: 4px 10px; }
+  .activity-completed-date { text-align: right; }
+}

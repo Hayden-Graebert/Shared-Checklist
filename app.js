@@ -59,6 +59,10 @@ const fireworksCtx = fireworksCanvas.getContext("2d");
 
 let currentList = null;
 let activities = [];
+const pendingActivityUpdates = new Set();
+const completionDateFormatter = new Intl.DateTimeFormat("en-GB", {
+  day: "numeric", month: "short", year: "numeric", timeZone: "Europe/London"
+});
 let realtimeChannel = null;
 let titleSaveTimer = null;
 let toastTimer = null;
@@ -594,7 +598,8 @@ async function subscribeToRealtime() {
           .sort(sortActivities);
         render();
 
-        if ((previous ? !previous.completed : !oldRow.completed) && newRow.completed) {
+        if (!pendingActivityUpdates.has(newRow.id) &&
+            (previous ? !previous.completed : !oldRow.completed) && newRow.completed) {
           launchFireworks();
         }
       }
@@ -666,6 +671,8 @@ function render() {
     const checkbox = document.createElement("input");
     checkbox.type = "checkbox";
     checkbox.checked = activity.completed;
+    checkbox.disabled = pendingActivityUpdates.has(activity.id);
+    checkbox.setAttribute("aria-label", checkLabel.getAttribute("aria-label"));
     checkbox.addEventListener("change", () => toggleActivity(activity.id, checkbox.checked));
 
     const checkmark = document.createElement("span");
@@ -676,15 +683,37 @@ function render() {
     text.className = "activity-text";
     text.textContent = activity.text;
 
+    const details = document.createElement("div");
+    details.className = "activity-details";
+    details.appendChild(text);
+
+    if (activity.completed) {
+      const completedAt = activity.completed_at ? new Date(activity.completed_at) : null;
+      const hasDate = completedAt && Number.isFinite(completedAt.getTime());
+      const date = document.createElement(hasDate ? "time" : "span");
+      date.className = "activity-completed-date";
+      if (hasDate) {
+        date.dateTime = completedAt.toISOString();
+        date.textContent = completionDateFormatter.format(completedAt);
+        date.setAttribute("aria-label", `Completed on ${date.textContent}`);
+        date.title = `Completed on ${date.textContent} (UK time)`;
+      } else {
+        date.textContent = "Date not recorded";
+        date.title = "This activity was completed before completion dates were recorded.";
+      }
+      details.appendChild(date);
+    }
+
     const deleteButton = document.createElement("button");
     deleteButton.type = "button";
+    deleteButton.disabled = pendingActivityUpdates.has(activity.id);
     deleteButton.className = "delete-button";
     deleteButton.title = "Delete activity";
     deleteButton.setAttribute("aria-label", `Delete "${activity.text}"`);
     deleteButton.textContent = "×";
     deleteButton.addEventListener("click", () => deleteActivity(activity.id));
 
-    item.append(checkLabel, text, deleteButton);
+    item.append(checkLabel, details, deleteButton);
     activityList.appendChild(item);
   }
 
@@ -735,33 +764,49 @@ async function addActivity(text) {
 }
 
 async function toggleActivity(id, completed) {
+  if (!currentList || pendingActivityUpdates.has(id)) return;
+  const previous = activities.find(item => item.id === id);
+  if (!previous || previous.completed === completed) return;
+  const listId = currentList.id;
+  pendingActivityUpdates.add(id);
   setSaveState("Saving…");
   showAppError("");
 
-  const previous = activities.find(item => item.id === id);
-  activities = activities.map(item => item.id === id ? { ...item, completed } : item);
+  // Show the change immediately, then use the database's authoritative timestamp.
+  activities = activities.map(item => item.id === id ? {
+    ...item, completed, completed_at: completed ? new Date().toISOString() : null
+  } : item);
   render();
 
-  const { error } = await supabaseClient
-    .from("activities")
-    .update({
-      completed,
-      updated_at: new Date().toISOString()
-    })
-    .eq("id", id)
-    .eq("list_id", currentList.id);
+  try {
+    const { data, error } = await supabaseClient
+      .from("activities")
+      .update({ completed })
+      .eq("id", id)
+      .eq("list_id", listId)
+      .select("id,list_id,text,completed,completed_at,created_at,updated_at")
+      .single();
 
-  if (error) {
+    if (error) throw error;
+    if (!data) throw new Error("The activity could not be saved. Refresh and try again.");
+    if (currentList?.id !== listId) return;
+    activities = activities.map(item => item.id === id ? data : item);
+    setSaveState("Saved");
+    if (!previous.completed && data.completed) launchFireworks();
+  } catch (error) {
     console.error(error);
-    activities = activities.map(item => item.id === id ? { ...item, completed: previous?.completed ?? false } : item);
-    render();
-    showAppError(error.message || "Could not save that change.");
+    if (currentList?.id !== listId) return;
+    // Restore both the checkbox and its original date if saving fails.
+    activities = activities.map(item => item.id === id ? previous : item);
+    const needsMigration = /completed_at/.test(error.message || "");
+    showAppError(needsMigration
+      ? "Run update-completion-dates.sql in your Supabase SQL Editor, then refresh and try again."
+      : error.message || "Could not save that change.");
     setSaveState("Not saved");
-    return;
+  } finally {
+    pendingActivityUpdates.delete(id);
+    if (currentList?.id === listId) render();
   }
-
-  setSaveState("Saved");
-  if (!previous?.completed && completed) launchFireworks();
 }
 
 async function deleteActivity(id) {
