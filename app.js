@@ -58,6 +58,9 @@ const fireworksCanvas = document.getElementById("fireworksCanvas");
 const fireworksCtx = fireworksCanvas.getContext("2d");
 
 let currentList = null;
+let currentUserId = null;
+let editingActivityDateId = null;
+let completionDateDraft = "";
 let activities = [];
 const pendingActivityUpdates = new Set();
 const completionDateFormatter = new Intl.DateTimeFormat("en-GB", {
@@ -163,6 +166,12 @@ async function ensureSession() {
 }
 
 function updateAccountUi(session) {
+  const previousUserId = currentUserId;
+  currentUserId = session?.user?.id || null;
+  if (previousUserId !== currentUserId) {
+    editingActivityDateId = null;
+    if (currentList) render();
+  }
   const anonymous = isAnonymousSession(session);
   const email = session?.user?.email || "";
 
@@ -688,6 +697,8 @@ function render() {
     details.appendChild(text);
 
     if (activity.completed) {
+      const dateGroup = document.createElement("div");
+      dateGroup.className = "activity-date-group";
       const completedAt = activity.completed_at ? new Date(activity.completed_at) : null;
       const hasDate = completedAt && Number.isFinite(completedAt.getTime());
       const date = document.createElement(hasDate ? "time" : "span");
@@ -701,7 +712,23 @@ function render() {
         date.textContent = "Date not recorded";
         date.title = "This activity was completed before completion dates were recorded.";
       }
-      details.appendChild(date);
+      dateGroup.appendChild(date);
+      if (canEditCompletionDates()) {
+        const editButton = document.createElement("button");
+        editButton.type = "button";
+        editButton.className = "date-edit-button";
+        editButton.textContent = hasDate ? "Edit date" : "Set date";
+        editButton.setAttribute("aria-label", `${hasDate ? "Edit" : "Set"} completion date for "${activity.text}"`);
+        editButton.disabled = pendingActivityUpdates.has(activity.id);
+        editButton.addEventListener("click", () => {
+          editingActivityDateId = activity.id;
+          completionDateDraft = completionDateInputValue(activity.completed_at);
+          render();
+          document.getElementById(`completion-date-${activity.id}`)?.focus();
+        });
+        dateGroup.appendChild(editButton);
+      }
+      details.appendChild(dateGroup);
     }
 
     const deleteButton = document.createElement("button");
@@ -714,6 +741,9 @@ function render() {
     deleteButton.addEventListener("click", () => deleteActivity(activity.id));
 
     item.append(checkLabel, details, deleteButton);
+    if (activity.completed && canEditCompletionDates() && editingActivityDateId === activity.id) {
+      item.appendChild(createCompletionDateEditor(activity));
+    }
     activityList.appendChild(item);
   }
 
@@ -728,6 +758,104 @@ function render() {
     activityList.appendChild(message);
   }
   renderProgressOnly();
+}
+
+function canEditCompletionDates() {
+  return Boolean(currentUserId && currentList?.created_by === currentUserId);
+}
+
+function completionDateInputValue(timestamp) {
+  if (!timestamp) return "";
+  const date = new Date(timestamp);
+  if (!Number.isFinite(date.getTime())) return "";
+  const parts = new Intl.DateTimeFormat("en-GB", {
+    year: "numeric", month: "2-digit", day: "2-digit", timeZone: "Europe/London"
+  }).formatToParts(date);
+  const value = type => parts.find(part => part.type === type).value;
+  return `${value("year")}-${value("month")}-${value("day")}`;
+}
+
+function createCompletionDateEditor(activity) {
+  const form = document.createElement("form");
+  form.className = "completion-date-editor";
+  const label = document.createElement("label");
+  label.htmlFor = `completion-date-${activity.id}`;
+  label.textContent = "Completion date";
+  const input = document.createElement("input");
+  input.id = label.htmlFor;
+  input.type = "date";
+  input.required = true;
+  input.min = "0001-01-01";
+  input.max = "9999-12-31";
+  input.value = completionDateDraft;
+  input.addEventListener("input", () => { completionDateDraft = input.value; });
+  input.disabled = pendingActivityUpdates.has(activity.id);
+  const save = document.createElement("button");
+  save.type = "submit";
+  save.className = "date-save-button";
+  save.textContent = pendingActivityUpdates.has(activity.id) ? "Saving…" : "Save date";
+  save.disabled = input.disabled;
+  const cancel = document.createElement("button");
+  cancel.type = "button";
+  cancel.className = "date-edit-button";
+  cancel.textContent = "Cancel";
+  cancel.disabled = input.disabled;
+  cancel.addEventListener("click", () => { editingActivityDateId = null; render(); });
+  form.addEventListener("submit", async event => {
+    event.preventDefault();
+    if (form.reportValidity()) await saveActivityCompletionDate(activity.id, input.value);
+  });
+  form.append(label, input, save, cancel);
+  return form;
+}
+
+async function saveActivityCompletionDate(id, dateValue) {
+  if (!canEditCompletionDates() || pendingActivityUpdates.has(id)) return;
+  const activity = activities.find(item => item.id === id);
+  if (!activity?.completed) return;
+  // This is a calendar date, not a claimed time of day. Noon UTC falls on the
+  // same UK date in both GMT and BST and avoids midnight timezone shifts.
+  const timestamp = `${dateValue}T12:00:00.000Z`;
+  const parsed = new Date(timestamp);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(dateValue) || dateValue.startsWith("0000-") ||
+      !Number.isFinite(parsed.getTime()) || parsed.toISOString().slice(0, 10) !== dateValue) {
+    showAppError("Choose a valid completion date.");
+    return;
+  }
+  const listId = currentList.id;
+  completionDateDraft = dateValue;
+  pendingActivityUpdates.add(id);
+  setSaveState("Saving…");
+  showAppError("");
+  render();
+  try {
+    const { data, error } = await supabaseClient
+      .from("activities")
+      .update({ completed_at: timestamp })
+      .eq("id", id)
+      .eq("list_id", listId)
+      .eq("completed", true)
+      .select("id,list_id,text,completed,completed_at,created_at,updated_at")
+      .single();
+    if (error) throw error;
+    if (currentList?.id !== listId) return;
+    if (!data?.completed || completionDateInputValue(data.completed_at) !== dateValue) {
+      throw new Error("The date was not saved. Run update-editable-dates.sql in Supabase, then refresh and try again.");
+    }
+    activities = activities.map(item => item.id === id ? data : item);
+    editingActivityDateId = null;
+    setSaveState("Saved");
+    showToast("Completion date updated");
+  } catch (error) {
+    console.error(error);
+    if (currentList?.id === listId) {
+      showAppError(error.message || "Could not save the completion date.");
+      setSaveState("Not saved");
+    }
+  } finally {
+    pendingActivityUpdates.delete(id);
+    if (currentList?.id === listId) render();
+  }
 }
 
 async function addActivity(text) {

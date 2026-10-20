@@ -809,3 +809,62 @@ h1 {
   .activity-details { flex-wrap: wrap; gap: 4px 10px; }
   .activity-completed-date { text-align: right; }
 }
+
+/* Creator-only date editing controls. */
+.activity-date-group {
+  display: flex;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 4px 8px;
+  margin-left: auto;
+  max-width: 100%;
+}
+.date-edit-button {
+  border: 0;
+  padding: 3px 0;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 11px;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.completion-date-editor {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+  min-width: 0;
+}
+.completion-date-editor label { color: var(--muted); font-size: 12px; }
+.completion-date-editor input {
+  min-width: 0;
+  max-width: 100%;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-solid);
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+}
+.date-save-button {
+  padding: 9px 12px;
+  border: 0;
+  border-radius: 8px;
+  background: var(--accent);
+  color: var(--accent-contrast);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+}
+.date-edit-button:disabled,
+.date-save-button:disabled { opacity: 0.55; cursor: wait; }
+@media (max-width: 480px) {
+  .activity-details .activity-text { flex-basis: 100%; }
+}
