@@ -170,6 +170,7 @@ function updateAccountUi(session) {
   currentUserId = session?.user?.id || null;
   if (previousUserId !== currentUserId) {
     editingActivityDateId = null;
+    resetActivityPhotoState();
     if (currentList) render();
   }
   const anonymous = isAnonymousSession(session);
@@ -395,13 +396,15 @@ async function loadMyChecklists() {
 
 async function deleteList(list, button) {
   const confirmed = window.confirm(
-    `Permanently delete "${list.title}"?\n\nAll its activities will be deleted, and it will disappear for everyone sharing it. This cannot be undone.`
+    `Permanently delete "${list.title}"?\n\nAll its activities and attached photos will be deleted, and it will disappear for everyone sharing it. This cannot be undone.`
   );
   if (!confirmed) return;
 
   button.disabled = true;
   button.textContent = "Deleting…";
   try {
+    if (uploadingPhotoActivities.size) throw new Error("Wait for photo uploads to finish before deleting a checklist.");
+    await removeChecklistPhotos(list.id);
     const { error } = await supabaseClient.rpc("delete_list", { p_list_id: list.id });
     if (error) throw error;
     showToast("Checklist deleted.");
@@ -514,6 +517,8 @@ async function openList(listId, invite, knownList = null) {
       }
     }
 
+    resetActivityPhotoState();
+    editingActivityDateId = null;
     currentList = knownList;
     const { data: activityRows, error: activityError } = await supabaseClient
       .from("activities")
@@ -601,11 +606,17 @@ async function subscribeToRealtime() {
         filter: `list_id=eq.${listId}`
       },
       ({ old: oldRow, new: newRow }) => {
+        if (currentList?.id !== listId) return;
         const previous = activities.find(item => item.id === newRow.id);
         activities = activities
           .map(item => item.id === newRow.id ? newRow : item)
           .sort(sortActivities);
+        if (!newRow.completed) {
+          expandedPhotoActivities.delete(newRow.id);
+          if (editingActivityDateId === newRow.id) editingActivityDateId = null;
+        }
         render();
+        if (expandedPhotoActivities.has(newRow.id)) loadActivityPhotos(newRow.id);
 
         if (!pendingActivityUpdates.has(newRow.id) &&
             (previous ? !previous.completed : !oldRow.completed) && newRow.completed) {
@@ -622,6 +633,8 @@ async function subscribeToRealtime() {
         filter: `list_id=eq.${listId}`
       },
       ({ old }) => {
+        expandedPhotoActivities.delete(old.id);
+        activityPhotoStates.delete(old.id);
         activities = activities.filter(item => item.id !== old.id);
         render();
       }
@@ -661,6 +674,7 @@ function renderProgressOnly() {
 
 function render() {
   listTitle.value = currentList?.title || "";
+  resetDateShortcut();
   activityList.innerHTML = "";
 
   const sorted = [...activities]
@@ -680,7 +694,7 @@ function render() {
     const checkbox = document.createElement("input");
     checkbox.type = "checkbox";
     checkbox.checked = activity.completed;
-    checkbox.disabled = pendingActivityUpdates.has(activity.id);
+    checkbox.disabled = pendingActivityUpdates.has(activity.id) || uploadingPhotoActivities.has(activity.id);
     checkbox.setAttribute("aria-label", checkLabel.getAttribute("aria-label"));
     checkbox.addEventListener("change", () => toggleActivity(activity.id, checkbox.checked));
 
@@ -688,8 +702,19 @@ function render() {
     checkmark.className = "checkmark";
     checkLabel.append(checkbox, checkmark);
 
-    const text = document.createElement("div");
-    text.className = "activity-text";
+    const text = document.createElement(activity.completed ? "button" : "div");
+    text.className = activity.completed ? "activity-text activity-toggle" : "activity-text";
+    if (activity.completed) {
+      text.type = "button";
+      text.setAttribute("aria-expanded", String(expandedPhotoActivities.has(activity.id)));
+      text.setAttribute("aria-controls", `activity-photos-${activity.id}`);
+      text.setAttribute("aria-label", `${activity.text}: show or hide photos`);
+      item.classList.add("expandable");
+      item.addEventListener("click", event => {
+        if (event.target.closest(".activity-photo-panel, .completion-date-editor, .activity-check, .delete-button")) return;
+        toggleActivityPhotos(activity.id);
+      });
+    }
     text.textContent = activity.text;
 
     const details = document.createElement("div");
@@ -714,26 +739,18 @@ function render() {
       }
       dateGroup.appendChild(date);
       if (canEditCompletionDates()) {
-        const editButton = document.createElement("button");
-        editButton.type = "button";
-        editButton.className = "date-edit-button";
-        editButton.textContent = hasDate ? "Edit date" : "Set date";
-        editButton.setAttribute("aria-label", `${hasDate ? "Edit" : "Set"} completion date for "${activity.text}"`);
-        editButton.disabled = pendingActivityUpdates.has(activity.id);
-        editButton.addEventListener("click", () => {
-          editingActivityDateId = activity.id;
-          completionDateDraft = completionDateInputValue(activity.completed_at);
-          render();
-          document.getElementById(`completion-date-${activity.id}`)?.focus();
-        });
-        dateGroup.appendChild(editButton);
+        date.dataset.activityDateId = activity.id;
+        date.tabIndex = 0;
+        date.setAttribute("aria-label", `${date.getAttribute("aria-label") || "Date not recorded"}. Type D A T E while focused to edit.`);
+        date.addEventListener("mouseleave", resetDateShortcut);
+        date.addEventListener("blur", resetDateShortcut);
       }
       details.appendChild(dateGroup);
     }
 
     const deleteButton = document.createElement("button");
     deleteButton.type = "button";
-    deleteButton.disabled = pendingActivityUpdates.has(activity.id);
+    deleteButton.disabled = pendingActivityUpdates.has(activity.id) || uploadingPhotoActivities.has(activity.id);
     deleteButton.className = "delete-button";
     deleteButton.title = "Delete activity";
     deleteButton.setAttribute("aria-label", `Delete "${activity.text}"`);
@@ -744,6 +761,7 @@ function render() {
     if (activity.completed && canEditCompletionDates() && editingActivityDateId === activity.id) {
       item.appendChild(createCompletionDateEditor(activity));
     }
+    if (activity.completed) item.appendChild(createActivityPhotoPanel(activity));
     activityList.appendChild(item);
   }
 
@@ -892,7 +910,7 @@ async function addActivity(text) {
 }
 
 async function toggleActivity(id, completed) {
-  if (!currentList || pendingActivityUpdates.has(id)) return;
+  if (!currentList || pendingActivityUpdates.has(id) || uploadingPhotoActivities.has(id)) return;
   const previous = activities.find(item => item.id === id);
   if (!previous || previous.completed === completed) return;
   const listId = currentList.id;
@@ -900,6 +918,10 @@ async function toggleActivity(id, completed) {
   setSaveState("Saving…");
   showAppError("");
 
+  if (!completed) {
+    expandedPhotoActivities.delete(id);
+    if (editingActivityDateId === id) editingActivityDateId = null;
+  }
   // Show the change immediately, then use the database's authoritative timestamp.
   activities = activities.map(item => item.id === id ? {
     ...item, completed, completed_at: completed ? new Date().toISOString() : null
@@ -938,28 +960,37 @@ async function toggleActivity(id, completed) {
 }
 
 async function deleteActivity(id) {
+  if (!currentList || pendingActivityUpdates.has(id) || uploadingPhotoActivities.has(id)) return;
   const activity = activities.find(item => item.id === id);
   if (!activity) return;
-
+  const listId = currentList.id;
+  pendingActivityUpdates.add(id);
   setSaveState("Saving…");
   showAppError("");
-
-  const { error } = await supabaseClient
-    .from("activities")
-    .delete()
-    .eq("id", id)
-    .eq("list_id", currentList.id);
-
-  if (error) {
-    console.error(error);
-    showAppError(error.message || "Could not delete that activity.");
-    setSaveState("Not saved");
-    return;
-  }
-
-  activities = activities.filter(item => item.id !== id);
   render();
-  setSaveState("Saved");
+  try {
+    // Storage files must be removed through the Storage API, before their
+    // activity disappears and membership-based access is no longer available.
+    await removeActivityPhotos(listId, id);
+    const { error } = await supabaseClient.from("activities").delete()
+      .eq("id", id).eq("list_id", listId);
+    if (error) throw error;
+    expandedPhotoActivities.delete(id);
+    activityPhotoStates.delete(id);
+    if (currentList?.id === listId) {
+      activities = activities.filter(item => item.id !== id);
+      setSaveState("Saved");
+    }
+  } catch (error) {
+    console.error(error);
+    if (currentList?.id === listId) {
+      showAppError(error.message || "Could not delete that activity.");
+      setSaveState("Not saved");
+    }
+  } finally {
+    pendingActivityUpdates.delete(id);
+    if (currentList?.id === listId) render();
+  }
 }
 
 function scheduleTitleSave() {
@@ -1238,6 +1269,42 @@ listTitle.addEventListener("keydown", (event) => {
 });
 closeChecklistButton.addEventListener("click", closeChecklist);
 window.addEventListener("resize", resizeCanvas);
+
+// Hidden date editor: type D, A, T, E over one date, at most two seconds
+// between keys. Keyboard users may focus that date instead of hovering.
+let dateShortcut = { id: null, index: 0, lastKeyAt: 0 };
+function resetDateShortcut() {
+  dateShortcut = { id: null, index: 0, lastKeyAt: 0 };
+}
+document.addEventListener("keydown", event => {
+  if (event.repeat || event.ctrlKey || event.altKey || event.metaKey ||
+      !canEditCompletionDates() ||
+      event.target.closest?.("input, textarea, select, [contenteditable='true']")) {
+    resetDateShortcut();
+    return;
+  }
+  const date = document.querySelector(".activity-completed-date:hover") ||
+    document.activeElement?.closest?.(".activity-completed-date");
+  const id = date?.dataset.activityDateId;
+  if (!id || pendingActivityUpdates.has(id)) { resetDateShortcut(); return; }
+  const now = Date.now();
+  if (dateShortcut.id !== id || now - dateShortcut.lastKeyAt > 2000) resetDateShortcut();
+  dateShortcut.id = id;
+  const key = event.key.toLowerCase();
+  const sequence = "date";
+  dateShortcut.index = key === sequence[dateShortcut.index] ? dateShortcut.index + 1 : (key === "d" ? 1 : 0);
+  dateShortcut.lastKeyAt = now;
+  if (dateShortcut.index === sequence.length) {
+    event.preventDefault();
+    const activity = activities.find(item => item.id === id && item.completed);
+    if (!activity) return;
+    editingActivityDateId = id;
+    completionDateDraft = completionDateInputValue(activity.completed_at);
+    render();
+    document.getElementById(`completion-date-${id}`)?.focus();
+  }
+});
+window.addEventListener("blur", resetDateShortcut);
 
 supabaseClient.auth.onAuthStateChange((_event, session) => {
   updateAccountUi(session);
